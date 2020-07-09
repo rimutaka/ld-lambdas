@@ -1,138 +1,133 @@
-use chrono::Utc;
-use dynomite::{FromAttributes, Item};
-use rusoto_dynamodb::{AttributeValue, DynamoDb, DynamoDbClient, GetItemInput};
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::env::var;
+use dynomite::{
+    attr_map,
+    dynamodb::{
+        AttributeDefinition, CreateTableInput, DynamoDb, DynamoDbClient, GetItemInput,
+        KeySchemaElement, ProvisionedThroughput, PutItemInput, ScanInput,
+    },
+    retry::Policy,
+    DynamoDbExt, FromAttributes, Item, Retries,
+};
+use log::{debug, error};
+use simple_logger;
 use tokio;
-use tokio_postgres::{Error, NoTls, Row};
+use tokio_postgres::{Error, NoTls};
 use uuid::Uuid;
 
 //use dynamodb_data;
-mod structures;
+mod structures_ddb;
+mod structures_pg;
+mod utils;
 
 #[tokio::main] // By default, tokio_postgres uses the tokio crate as its runtime.
 async fn main() -> Result<(), Error> {
-    println!("started");
+    simple_logger::init_with_level(log::Level::Debug).expect("Cannot initialise simple_logger");
+    debug!("main started");
+    debug!("");
+
+    // prepare some constants
+    let user_id = uuid::Uuid::parse_str("dbc44eaa-364f-4a4f-b25e-15218c7928a7").unwrap();
+    let list_title = "My test list X".to_string();
+    let lid = Uuid::new_v4();
 
     // Connect to the database.
-    let (client, connection) = tokio_postgres::connect(&load_db_config(), NoTls)
-        .await
-        .expect("Cannot connect to the DB.");
+    let pg_client = utils::get_pg_client().await;
 
-    // The connection object performs the actual communication with the database,
-    // so spawn it off to run on its own.
-    tokio::spawn(async move {
-        if let Err(e) = connection.await {
-            eprintln!("connection error: {}", e);
-        }
-    });
+    // create a new list
+    let pg_list_template = structures_pg::t_list::new(lid.clone(), user_id);
+    let pg_list =
+        structures_pg::structures_pg_impl::put_t_list(&pg_list_template, &pg_client).await;
 
-    // Now we can execute a simple statement that just returns its parameter.
-    let rows = client
-        //.query("SELECT $1::TEXT", &[&"hello world"])
-        .query("SELECT * from t_list_item", &[])
-        .await
-        .expect("Query failed");
+    // exit if there is no list
+    if pg_list.is_none() {
+        error!(
+            "Failed to create a new list for user {} / lid {}",
+            user_id, pg_list_template.lid
+        );
+        return Ok(());
+    }
 
-    // And then check that we got back the same string we sent over.
-    let row_count = rows.len();
-    println!("Rows: {}", row_count);
+    // create a new list in DDB
+    let ddb_list_template = structures_ddb::LdList::new(list_title, pg_list.unwrap());
 
-    let item = structures::t_list_item::from(&rows[0]);
+    debug!("list created: {:?}", ddb_list_template);
+    debug!("");
 
-    let json = serde_json::to_string(&item).expect("Cannot convert Row to Json");
+    // print the list as JSON
+    let json = serde_json::to_string(&ddb_list_template).expect("Cannot convert Row to Json");
+    println!("Json - single item: {}", json);
+    println!();
 
-    //println!("Data: {}, {}, {}", item.liid, item.created_on_utc.to_rfc3339(), item.child_lid.unwrap_or(Uuid::default()));
-    println!("Json: {}", json);
     /*
-    let client = rusoto_s3::S3Client::new(rusoto_core::Region::default());
+        // create new items
+        let pg_list_item_1 = structures_pg::t_list_item::new(pg_list.lid);
+        let pg_list_item_2 = structures_pg::t_list_item::new(pg_list.lid);
+        let pg_list_item_3 = structures_pg::t_list_item::new(pg_list.lid);
+        debug!("dummy item created: {:?}", pg_list_item_1);
+        println!();
 
-    let buckets = match client.list_buckets().await {
-        Ok(s3_result) => s3_result,
-        Err(s3_error) => panic!("S3 error {}", s3_error)
-    };
+        let pg_list_item_1p =
+            structures_pg::structures_pg_impl::put_t_list_item(&pg_list_item_1, &client).await;
+        let pg_list_item_2p =
+            structures_pg::structures_pg_impl::put_t_list_item(&pg_list_item_2, &client).await;
+        let pg_list_item_3p =
+            structures_pg::structures_pg_impl::put_t_list_item(&pg_list_item_3, &client).await;
+        debug!("pg item created: {:?}", pg_list_item_1p);
+        println!();
 
-    println!("Buckets {:?}", buckets);
+        // get single item
+        let pg_list_item_1g = structures_pg::structures_pg_impl::get_t_list_item(
+            pg_list_item_1p.clone().unwrap().liid,
+            &client,
+        )
+        .await;
+        debug!("pg item retrieved: {:?}", pg_list_item_1g);
+        println!();
+
+        // print single item as JSON
+        let json = serde_json::to_string(&pg_list_item_1g).expect("Cannot convert Row to Json");
+        println!("Json - single item: {}", json);
+        println!();
+
+        // get all items for the list
+        let items_get = structures_pg::structures_pg_impl::get_t_list_items(pg_list.lid, &client).await;
+        debug!(
+            "pg items retrieved: {}",
+            items_get.as_ref().map(|itg| itg.len()).unwrap_or_else(|| 0)
+        );
+        println!();
+
+        // print JSON for all items
+        let json = serde_json::to_string(&items_get).expect("Cannot convert Rows to Json");
+        println!("Json - all list items: {}", json);
+        println!();
+
+        // get a single list
+        let list_get = structures_pg::structures_pg_impl::get_t_list(pg_list.un.lid, &client).await;
+        debug!("pg list retrieved: {:?}", list_get);
+        println!();
+
+        // print JSON for single list
+        let json = serde_json::to_string(&list_get).expect("Cannot convert Rows to Json");
+        println!("Json - single list: {}", json);
+        println!();
+
     */
 
-    let client = DynamoDbClient::new(rusoto_core::Region::UsEast1);
+    let ddb_client = rusoto_dynamodb::DynamoDbClient::new(rusoto_core::Region::UsEast1);
+    debug!("ddb_client created");
 
-    match client
-        .get_item(build_ddb_get_input("lid", &item.parent_lid, "tlist"))
-        .await
-    {
-        Ok(output) => {
-            match output.item {
-                Some(x) => {
-                    println!();
-                    println!("Raw from DDB: {:?}", x);
-                    println!();
+    match ddb_list_template.save_in_ddb(&ddb_client).await {
+        Ok(ddb_list) => {
+            println!(
+                "Clean JSON from DDB: {}",
+                serde_json::to_value(ddb_list).unwrap().to_string()
+            );
+        },
+        Err(msg) => {
+            println!("Something went wrong: {}", msg)
 
-                    let y: structures::t_list =
-                    structures::t_list::from_attrs(x).expect("Error converting DDB into struct");
-
-                    println!("Serialized from DDB: {:?}", y);
-                    println!();
-
-                    println!("Clean JSON from DDB: {}",  serde_json::to_value(y).unwrap().to_string());
-                }
-                None => {
-                    println!("output.item is empty");
-                }
-            };
-
-            /*
-                        let x = dynamodb_data::from_fields::<serde_json::Value>(output.item.expect("Empty item")).expect("dynamodb_data failed");
-                        println!("Output as JSON {:?}", x);
-            */
-        }
-        Err(error) => {
-            panic!("DDB error {}", error);
         }
     }
 
     Ok(())
 }
-
-/// Load DB Config from env variables
-fn load_db_config() -> String {
-    // list of env vars required to connect to the DB
-    const EV_DB_NAME: &'static str = "DB_NAME";
-    const EV_DB_USER: &'static str = "DB_USER";
-    const EV_DB_PWD: &'static str = "DB_PWD";
-    const EV_DB_HOST: &'static str = "DB_HOST";
-
-    // extract values
-    let db_name = var(EV_DB_NAME).expect((format!("Env var {}", EV_DB_NAME)).as_str());
-    let db_user = var(EV_DB_USER).expect((format!("Env var {}", EV_DB_USER)).as_str());
-    let db_pwd = var(EV_DB_PWD).expect((format!("Env var {}", EV_DB_PWD)).as_str());
-    let db_host = var(EV_DB_HOST).expect((format!("Env var {}", EV_DB_HOST)).as_str());
-
-    // build a connection string if all values are present
-    let conf = format!(
-        "host={} dbname={} user={} password='{}' connect_timeout=5",
-        db_host, db_name, db_user, db_pwd
-    );
-
-    return conf;
-}
-
-/// Builds GetItemInput from the key and the table name
-fn build_ddb_get_input(table_key: &str, key_value: &Uuid, table: &str) -> GetItemInput {
-    let mut key: HashMap<String, AttributeValue> = HashMap::new();
-    key.insert(
-        String::from(table_key),
-        AttributeValue {
-            s: Some(key_value.to_string()),
-            ..Default::default()
-        },
-    );
-
-    GetItemInput {
-        key: key,
-        table_name: String::from(table),
-        ..Default::default()
-    }
-}
-
