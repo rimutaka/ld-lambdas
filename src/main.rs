@@ -122,11 +122,27 @@ async fn main() -> Result<(), Error> {
                 "Clean JSON from DDB: {}",
                 serde_json::to_value(ddb_list).unwrap().to_string()
             );
-        },
-        Err(msg) => {
-            println!("Something went wrong: {}", msg)
-
         }
+        Err(msg) => println!("Something went wrong: {}", msg),
+    }
+
+    // add a new item to the list
+    let liid = Uuid::new_v4();
+    let list_item_from_ui = structures_ddb::LdListItem {
+        liid: liid,
+        title: "New item".to_string(),
+        description: Some("Some long description".to_string()),
+        rel: structures_pg::t_list_item::new(liid.clone(), lid.clone()),
+    };
+
+    match structures_ddb::LdListItem::put_list_item_ddb (list_item_from_ui, &ddb_client, &pg_client).await {
+        Ok(ddb_list_item) => {
+            println!(
+                "Clean JSON from DDB: {}",
+                serde_json::to_value(ddb_list_item).unwrap().to_string()
+            );
+        }
+        Err(msg) => println!("Something went wrong: {}", msg),
     }
 
     Ok(())

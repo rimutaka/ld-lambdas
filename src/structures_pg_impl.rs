@@ -66,7 +66,7 @@ impl t_list {
 }
 
 impl t_list_item {
-    /// Only `liid`, `parent_lid` and `created_on_utc` are set
+    /// Creates a new instance with `liid` and `parent_lid` to be saved in the DB.
     pub(crate) fn new(liid: Uuid, parent_lid: Uuid) -> Self {
         Self {
             liid,
@@ -78,7 +78,7 @@ impl t_list_item {
             top_liid: None,
             user_id: None,
             org_id: None,
-            created_on_utc: chrono::Utc::now(),
+            created_on_utc: None,
             validated_on_utc: None,
         }
     }
