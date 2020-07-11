@@ -41,7 +41,7 @@ pub(crate) struct t_list {
     pub lid: Uuid,
     pub user_id: Option<Uuid>,
     pub org_id: Option<Uuid>,
-    pub created_on_utc: chrono::DateTime<Utc>,
+    pub created_on_utc: Option<chrono::DateTime<Utc>>,
     pub validated_on_utc: Option<chrono::DateTime<Utc>>,
 }
 

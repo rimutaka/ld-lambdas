@@ -53,13 +53,14 @@ impl From<&Row> for t_user {
 // ===== struct::new() implementation =====
 
 impl t_list {
-    /// Only `lid` and `created_on_utc` are set.
+    /// Creates a new object with only the required fields set.
+    /// Not saved in the DB.
     pub(crate) fn new(lid: Uuid, user_id: Uuid) -> Self {
         Self {
             lid,
             user_id: Some(user_id),
             org_id: None,
-            created_on_utc: chrono::Utc::now(),
+            created_on_utc: None,
             validated_on_utc: None,
         }
     }

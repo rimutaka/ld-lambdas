@@ -29,7 +29,6 @@ const ERR_MSG_SAVING_ITEM_FAILED: &str = "Failed to save this new list item in t
 #[derive(Item, Debug, Serialize, Deserialize)]
 pub(crate) struct LdListItem {
     #[dynomite(partition_key)]
-    pub liid: Uuid,
     pub title: String,
     pub description: Option<String>,
     pub rel: structures_pg::t_list_item,
@@ -48,26 +47,53 @@ pub(crate) struct LdList {
 }
 
 impl LdList {
-    /// Create a new list with no items
-    pub(crate) fn new(title: String, t_list: structures_pg::t_list) -> LdList {
+    /// Create a new LdList struct with no items and only required fields.
+    /// It is not saved in the DB.
+    pub(crate) fn new(lid: Uuid, title: String, user_id: Uuid) -> LdList {
+        // create a new list
+        let pg_list_template = structures_pg::t_list::new(lid.clone(), user_id);
+
         LdList {
-            lid: t_list.lid.clone(),
+            lid: lid,
             title: title,
             description: None,
             tags: None,
             items: None,
-            rel: t_list,
+            rel: pg_list_template,
         }
     }
 
-    /// Save itself in DDB, get the latest version back and return it in the result.
-    pub(crate) async fn save_in_ddb(self, ddb_client: &DynamoDbClient) -> Result<Self, String> {
+    /// Save itself in DDB, get the latest version back and return it wrapped in Result.
+    /// The `rel` section is saved in PG if none exists.
+    pub(crate) async fn save_in_ddb(
+        mut self,
+        ddb_client: &DynamoDbClient,
+        pg_client: &tokio_postgres::Client,
+    ) -> Result<Option<Self>, String> {
         // this var will be used a few times
         let lid = self.lid.clone();
 
         debug!("save_in_ddb for {}", lid);
 
-        // put the item
+        // check if it's a brand-new list and needs `rel` section created in PG first
+        if self.rel.created_on_utc.is_none() {
+            let pg_list =
+                structures_pg::structures_pg_impl::put_t_list(&self.rel, &pg_client).await;
+
+            // exit if there is no list
+            if pg_list.is_none() {
+                error!(
+                    "Failed to create a new list for user {} / lid {}",
+                    self.rel.user_id.expect("Missing user_id"), lid
+                );
+                return Err("Failed to create a new list.".to_string());
+            }
+
+            // replace the placeholder list with the proper one from PG
+            self.rel = pg_list.unwrap();
+        }
+
+        // put the item in DDB
         if let Err(put_err) = ddb_client
             .put_item(utils::build_ddb_put_input(self.into(), TABLE_NAME_TLIST))
             .await
@@ -85,7 +111,7 @@ impl LdList {
     pub(crate) async fn get_from_ddb(
         lid: &Uuid,
         ddb_client: &DynamoDbClient,
-    ) -> Result<Self, String> {
+    ) -> Result<Option<Self>, String> {
         // this var will be used a few times
         let lid = lid.clone();
 
@@ -109,11 +135,11 @@ impl LdList {
                             .expect("Error converting DDB list into LdList");
 
                         debug!("Serialized from DDB: {:?}", new_self);
-                        return Ok(new_self);
+                        return Ok(Some(new_self));
                     }
                     None => {
                         error!("Just-saved DDB item could not be retrieved - no error, no data.");
-                        return Err("Failed to save the item. Try again.".to_string());
+                        return Ok(None);
                     }
                 };
             }
@@ -139,19 +165,24 @@ impl LdListItem {
         if list.is_err() {
             return Err(list.unwrap_err());
         }
+        let list = list.unwrap();
+        if list.is_none() {
+            return Err("The list for this item doesn't exist".to_string());
+        }
 
+        // this is the actual list struct that will be modified
         let mut list = list.unwrap();
 
+        // make sure there is a container for items
         if list.items.is_none() {
             list.items = Some(Vec::new());
         }
 
-        //if let Some(mut items) = list.items.as_ref().ite {
         // try to find the right item in the existing list
         let mut is_existing_item = false;
         let ref mut items = list.items.as_mut().unwrap();
         for mut existing_item in items.into_iter() {
-            if existing_item.liid == list_item.liid {
+            if existing_item.rel.liid == list_item.rel.liid {
                 existing_item.title = list_item.title.clone();
                 existing_item.description = list_item.description.clone();
                 is_existing_item = true;
@@ -163,7 +194,7 @@ impl LdListItem {
         if !is_existing_item {
             // create t_list_item in PG for rel field
             let new_rel_item_template =
-                structures_pg::t_list_item::new(list_item.liid, list_item.rel.parent_lid);
+                structures_pg::t_list_item::new(list_item.rel.liid, list_item.rel.parent_lid);
             let new_rel_item = structures_pg::structures_pg_impl::put_t_list_item(
                 &new_rel_item_template,
                 &pg_client,
@@ -179,7 +210,6 @@ impl LdListItem {
 
             // assign t_list_item to rel field
             let new_ddb_item = LdListItem {
-                liid: list_item.liid,
                 title: list_item.title.clone(),
                 description: list_item.description.clone(),
                 rel: new_rel_item.unwrap(),
@@ -187,26 +217,20 @@ impl LdListItem {
 
             items.push(new_ddb_item);
         }
-        //}
 
-        println!("");
-        println!("List: {:?}", list);
-
-        Err("test".to_string())
-
-        /*
         // update the list in the DB
-        let list_updated = list.save_in_ddb(&ddb_client).await;
+        let list_updated = list.save_in_ddb(&ddb_client, &pg_client).await;
 
         if list_updated.is_err() {
             return Err(list_updated.unwrap_err());
-        }
+        };
 
         // extract and return the item as it is in the DB
+        let list_updated = list_updated.unwrap();
         if let Some(items) = list_updated.unwrap().items {
             // try to find the matching item in the updated list to return back
             for item_updated in items.into_iter() {
-                if item_updated.liid == list_item.liid {
+                if item_updated.rel.liid == list_item.rel.liid {
                     return Ok(item_updated);
                 }
             }
@@ -214,6 +238,5 @@ impl LdListItem {
 
         // something went wrong - the items we saved is not there
         Err(ERR_MSG_SAVING_ITEM_FAILED.to_string())
-        */
     }
 }
