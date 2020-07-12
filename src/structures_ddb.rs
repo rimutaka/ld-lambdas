@@ -1,23 +1,18 @@
 use crate::structures_pg::{self};
 use crate::utils;
 use dynomite::{
-    attr_map,
     dynamodb::{
-        AttributeDefinition, CreateTableInput, DynamoDb, DynamoDbClient, GetItemInput,
-        KeySchemaElement, ProvisionedThroughput, PutItemInput, ScanInput,
+         DynamoDb, DynamoDbClient
     },
-    retry::Policy,
-    DynamoDbExt, FromAttributes, Item, Retries,
+    FromAttributes, Item
 };
-use log::{self, debug, error, info, warn};
+use log::{self, debug, error};
 use serde::{Deserialize, Serialize};
 use tokio_postgres;
 use uuid::Uuid;
 
-//#[path ="./structures_pg.rs"]
-//mod structures_pg;
-//#[path ="./structures_pg_impl.rs"]
-//mod structures_pg_impl;
+#[path = "./structures_ddb_test.rs"]
+pub(crate) mod tests_ddb;
 
 // DDB structures
 
@@ -31,7 +26,7 @@ pub(crate) struct LdListItem {
     #[dynomite(partition_key)]
     pub title: String,
     pub description: Option<String>,
-    pub rel: structures_pg::t_list_item,
+    pub rel: structures_pg::TListItem,
 }
 
 /// A complete List structure to exchange with the front-end
@@ -43,7 +38,7 @@ pub(crate) struct LdList {
     pub description: Option<String>,
     pub tags: Option<Vec<String>>,
     pub items: Option<Vec<LdListItem>>,
-    pub rel: structures_pg::t_list,
+    pub rel: structures_pg::TList,
 }
 
 impl LdList {
@@ -51,7 +46,7 @@ impl LdList {
     /// It is not saved in the DB.
     pub(crate) fn new(lid: Uuid, title: String, user_id: Uuid) -> LdList {
         // create a new list
-        let pg_list_template = structures_pg::t_list::new(lid.clone(), user_id);
+        let pg_list_template = structures_pg::TList::new(lid.clone(), user_id);
 
         LdList {
             lid: lid,
@@ -78,13 +73,14 @@ impl LdList {
         // check if it's a brand-new list and needs `rel` section created in PG first
         if self.rel.created_on_utc.is_none() {
             let pg_list =
-                structures_pg::structures_pg_impl::put_t_list(&self.rel, &pg_client).await;
+                structures_pg::put_t_list(&self.rel, &pg_client).await;
 
             // exit if there is no list
             if pg_list.is_none() {
                 error!(
                     "Failed to create a new list for user {} / lid {}",
-                    self.rel.user_id.expect("Missing user_id"), lid
+                    self.rel.user_id.expect("Missing user_id"),
+                    lid
                 );
                 return Err("Failed to create a new list.".to_string());
             }
@@ -134,7 +130,6 @@ impl LdList {
                         let new_self = LdList::from_attrs(output_item)
                             .expect("Error converting DDB list into LdList");
 
-                        debug!("Serialized from DDB: {:?}", new_self);
                         return Ok(Some(new_self));
                     }
                     None => {
@@ -194,8 +189,8 @@ impl LdListItem {
         if !is_existing_item {
             // create t_list_item in PG for rel field
             let new_rel_item_template =
-                structures_pg::t_list_item::new(list_item.rel.liid, list_item.rel.parent_lid);
-            let new_rel_item = structures_pg::structures_pg_impl::put_t_list_item(
+                structures_pg::TListItem::new(list_item.rel.liid, list_item.rel.parent_lid);
+            let new_rel_item = structures_pg::put_t_list_item(
                 &new_rel_item_template,
                 &pg_client,
             )
@@ -238,5 +233,49 @@ impl LdListItem {
 
         // something went wrong - the items we saved is not there
         Err(ERR_MSG_SAVING_ITEM_FAILED.to_string())
+    }
+
+    /// Delete the list item from PG and DDB and returns the list without the item.
+    pub(crate) async fn del_list_item_ddb(
+        lid: Uuid,
+        liid: Uuid,
+        ddb_client: &DynamoDbClient,
+        pg_client: &tokio_postgres::Client,
+    ) -> Result<Option<LdList>, String> {
+        // delete the list item from PG
+        structures_pg::del_t_list_item(liid.clone(), &pg_client).await;
+
+        // get the list from DDB
+        let list = LdList::get_from_ddb(&lid, &ddb_client).await;
+
+        // return the error if no list exists or there were problems getting it from DDB
+        if list.is_err() {
+            return Err(list.unwrap_err());
+        }
+        let list = list.unwrap();
+        if list.is_none() {
+            return Err("The list for this item doesn't exist".to_string());
+        }
+
+        // this is the actual list struct that will be modified
+        let mut list = list.unwrap();
+
+        // return the list if there are no items
+        if list.items.is_none() {
+            return Ok(Some(list));
+        }
+
+        // try to find the right item in the existing list
+        // and remove it by index
+        let ref mut items = list.items.as_mut().unwrap();
+        for i in 0..items.len() {
+            if items[i].rel.liid == liid {
+                items.remove(i);
+                break;
+            }
+        }
+
+        // update the list in the DB
+        list.save_in_ddb(&ddb_client, &pg_client).await
     }
 }

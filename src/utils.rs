@@ -1,9 +1,8 @@
-use dynomite::{Attribute, Item};
 use log::{debug, error};
 use rusoto_dynamodb::{AttributeValue, GetItemInput, PutItemInput};
 use std::collections::HashMap;
 use std::env::var;
-use tokio_postgres::{Error, NoTls};
+use tokio_postgres::{NoTls};
 use uuid::Uuid;
 
 /// Load DB Config from env variables

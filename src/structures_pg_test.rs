@@ -1,14 +1,14 @@
 // Use cargo test -- --nocapture to get the full logging output
 #[cfg(test)]
-mod tests {
-    use crate::structures_pg::{structures_pg_impl::*, *};
+mod tests_pg {
+    use crate::structures_pg::*;
     use crate::utils::get_pg_client;
-    use log::{self, debug, error};
+    use log::{self, debug};
     use uuid::Uuid;
 
     #[tokio::test]
     async fn test_postgres_functions() {
-        simple_logger::init_with_level(log::Level::Debug).expect("Cannot initialise simple_logger");
+        simple_logger::init_with_level(log::Level::Debug).expect("Cannot initialize simple_logger");
         debug!("main started");
 
         // Connect to the database.
@@ -43,14 +43,14 @@ mod tests {
         assert!(pg_user_g5.is_none());
 
         // create a new list
-        let pg_list = t_list::new(Uuid::new_v4(), pg_user.user_id.clone());
+        let pg_list = TList::new(Uuid::new_v4(), pg_user.user_id.clone());
         let list_put = put_t_list(&pg_list, &client).await;
         debug!("list created: {:?}", list_put);
 
         // create new items
-        let pg_list_item_1 = t_list_item::new(Uuid::new_v4(), pg_list.lid);
-        let pg_list_item_2 = t_list_item::new(Uuid::new_v4(), pg_list.lid);
-        let pg_list_item_3 = t_list_item::new(Uuid::new_v4(), pg_list.lid);
+        let pg_list_item_1 = TListItem::new(Uuid::new_v4(), pg_list.lid);
+        let pg_list_item_2 = TListItem::new(Uuid::new_v4(), pg_list.lid);
+        let pg_list_item_3 = TListItem::new(Uuid::new_v4(), pg_list.lid);
         debug!("dummy item created: {:?}", pg_list_item_1);
 
         let pg_list_item_1p = put_t_list_item(&pg_list_item_1, &client).await;

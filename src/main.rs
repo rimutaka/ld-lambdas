@@ -55,7 +55,7 @@ async fn main() -> Result<(), Error> {
     let list_item_from_ui = structures_ddb::LdListItem {
         title: "New item 1".to_string(),
         description: Some("Some long description 1".to_string()),
-        rel: structures_pg::t_list_item::new(liid_1.clone(), lid.clone()),
+        rel: structures_pg::TListItem::new(liid_1.clone(), lid.clone()),
     };
     let list_item_1 =
         structures_ddb::LdListItem::put_list_item_ddb(list_item_from_ui, &ddb_client, &pg_client)
@@ -72,7 +72,7 @@ async fn main() -> Result<(), Error> {
     let list_item_from_ui = structures_ddb::LdListItem {
         title: "New item 2".to_string(),
         description: Some("Some long description 2".to_string()),
-        rel: structures_pg::t_list_item::new(liid_2.clone(), lid.clone()),
+        rel: structures_pg::TListItem::new(liid_2.clone(), lid.clone()),
     };
     let list_item_2 =
         structures_ddb::LdListItem::put_list_item_ddb(list_item_from_ui, &ddb_client, &pg_client)
@@ -88,7 +88,7 @@ async fn main() -> Result<(), Error> {
     let list_item_from_ui = structures_ddb::LdListItem {
         title: "New item 1 - still".to_string(),
         description: Some("Some long description - modified".to_string()),
-        rel: structures_pg::t_list_item::new(liid_1.clone(), lid.clone()),
+        rel: structures_pg::TListItem::new(liid_1.clone(), lid.clone()),
     };
     let list_item_1a =
         structures_ddb::LdListItem::put_list_item_ddb(list_item_from_ui, &ddb_client, &pg_client)
@@ -101,6 +101,16 @@ async fn main() -> Result<(), Error> {
     assert_eq!(list_item_1a.rel.liid, liid_1); // checks if it's the right item
     assert_ne!(list_item_1a.title, list_item_1.title); // checks if the title changed
     assert_ne!(list_item_1a.description, list_item_1.description); // checks if the description changed
+
+    // delete items one by one
+    let list_del_1 =
+        structures_ddb::LdListItem::del_list_item_ddb(lid, liid_1.clone(), &ddb_client, &pg_client)
+            .await;
+
+    // check if the 1st item was deleted successfully
+    for item_remaining in list_del_1.unwrap().unwrap().items.unwrap() {
+        assert_ne!(item_remaining.rel.liid, liid_1);
+    }
 
     Ok(())
 }
