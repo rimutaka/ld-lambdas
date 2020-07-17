@@ -1,10 +1,8 @@
 use crate::structures_pg::{self};
 use crate::utils;
 use dynomite::{
-    dynamodb::{
-         DynamoDb, DynamoDbClient
-    },
-    FromAttributes, Item
+    dynamodb::{DynamoDb, DynamoDbClient},
+    FromAttributes, Item,
 };
 use log::{self, debug, error};
 use serde::{Deserialize, Serialize};
@@ -25,6 +23,7 @@ const ERR_MSG_SAVING_ITEM_FAILED: &str = "Failed to save this new list item in t
 pub(crate) struct LdListItem {
     #[dynomite(partition_key)]
     pub title: String,
+    #[dynomite(default)]
     pub description: Option<String>,
     pub rel: structures_pg::TListItem,
 }
@@ -35,8 +34,11 @@ pub(crate) struct LdList {
     #[dynomite(partition_key)]
     pub lid: Uuid,
     pub title: String,
+    #[dynomite(default)]
     pub description: Option<String>,
+    #[dynomite(default)]
     pub tags: Option<Vec<String>>,
+    #[dynomite(default)]
     pub items: Option<Vec<LdListItem>>,
     pub rel: structures_pg::TList,
 }
@@ -72,8 +74,7 @@ impl LdList {
 
         // check if it's a brand-new list and needs `rel` section created in PG first
         if self.rel.created_on_utc.is_none() {
-            let pg_list =
-                structures_pg::put_t_list(&self.rel, &pg_client).await;
+            let pg_list = structures_pg::put_t_list(&self.rel, &pg_client).await;
 
             // exit if there is no list
             if pg_list.is_none() {
@@ -104,10 +105,7 @@ impl LdList {
     }
 
     /// Retrieve a single list from DDB by ID. Should not panic.
-    pub(crate) async fn get_from_ddb(
-        lid: &Uuid,
-        ddb_client: &DynamoDbClient,
-    ) -> Result<Option<Self>, String> {
+    pub(crate) async fn get_from_ddb(lid: &Uuid, ddb_client: &DynamoDbClient) -> Result<Option<Self>, String> {
         // this var will be used a few times
         let lid = lid.clone();
 
@@ -115,11 +113,7 @@ impl LdList {
 
         // retrieve the latest copy, which may be a bit different from what was saved
         match ddb_client
-            .get_item(utils::build_ddb_get_input(
-                TABLE_KEY_FOR_TLIST,
-                &lid,
-                TABLE_NAME_TLIST,
-            ))
+            .get_item(utils::build_ddb_get_input(TABLE_KEY_FOR_TLIST, &lid, TABLE_NAME_TLIST))
             .await
         {
             Ok(get_item_output) => {
@@ -127,8 +121,7 @@ impl LdList {
                     Some(output_item) => {
                         debug!("Raw from DDB: {:?}", output_item);
 
-                        let new_self = LdList::from_attrs(output_item)
-                            .expect("Error converting DDB list into LdList");
+                        let new_self = LdList::from_attrs(output_item).expect("Error converting DDB list into LdList");
 
                         return Ok(Some(new_self));
                     }
@@ -143,6 +136,102 @@ impl LdList {
                 return Err("Failed to save the item. Try again.".to_string());
             }
         }
+    }
+
+    /// Retrieve a single list from DDB by ID. Should not panic.
+    pub(crate) async fn get_all_user_lists_from_ddb(
+        user_id: Uuid,
+        ddb_client: &DynamoDbClient,
+        pg_client: &tokio_postgres::Client,
+    ) -> Result<Option<Vec<Self>>, String> {
+        debug!("get_for_user_from_ddb");
+
+        // get the list of list ids from PG
+        let list_ids = structures_pg::get_user_lists(user_id, &pg_client).await;
+
+        // check if there is any data
+        let list_ids = match list_ids {
+            Some(v) => {
+                if v.len() == 0 {
+                    return Ok(None);
+                };
+                // extract the list of ids
+                let mut all_ids: Vec<Uuid> = Vec::new();
+                for tl in v {
+                    all_ids.push(tl.lid);
+                }
+                all_ids
+            }
+            None => {
+                return Ok(None);
+            }
+        };
+
+        // get all user lists from DDB
+        match ddb_client
+            .batch_get_item(utils::build_ddb_get_batch_input(
+                TABLE_KEY_FOR_TLIST,
+                &list_ids,
+                TABLE_NAME_TLIST,
+            ))
+            .await
+        {
+            Ok(get_items_output) => {
+                match get_items_output.responses {
+                    Some(mut output_tables) => {
+                        debug!("Raw from DDB: {:?}", output_tables);
+
+                        // extract the list and convert it into the output format
+
+                        let output_items = output_tables.remove(TABLE_NAME_TLIST).unwrap();
+
+                        let mut fn_output: Vec<LdList> = Vec::new();
+                        for output_item in output_items {
+                            fn_output
+                                .push(LdList::from_attrs(output_item).expect("Error converting DDB list into LdList"));
+                        }
+
+                        return Ok(Some(fn_output));
+                    }
+                    None => {
+                        error!("No user lists found in DDB - DDB is out of sync.");
+                        return Ok(None);
+                    }
+                };
+            }
+            Err(error) => {
+                error!("DDB error {}", error);
+                return Err("Failed to get user lists. Try again.".to_string());
+            }
+        }
+    }
+
+    /// Deletes the list from DDB and PG.
+    pub(crate) async fn delete_from_all_dbs(
+        self,
+        ddb_client: &DynamoDbClient,
+        pg_client: &tokio_postgres::Client,
+    ) -> Result<(), String> {
+        debug!("delete_from_all_dbs for {}", self.lid);
+
+        // delete from PG
+        structures_pg::del_t_list(self.lid.clone(), &pg_client)
+            .await
+            .expect("delete_from_all_dbs failed");
+        debug!("List deleted from PG.");
+
+        // delete from DDB
+        ddb_client
+            .delete_item(utils::build_ddb_del_input(
+                TABLE_KEY_FOR_TLIST,
+                self.lid.clone(),
+                TABLE_NAME_TLIST,
+            ))
+            .await
+            .expect("Failed to delete from DDB.");
+        debug!("List deleted from DDB.");
+
+        Ok(())
     }
 }
 
@@ -188,13 +277,8 @@ impl LdListItem {
         // create a new item if needed
         if !is_existing_item {
             // create t_list_item in PG for rel field
-            let new_rel_item_template =
-                structures_pg::TListItem::new(list_item.rel.liid, list_item.rel.parent_lid);
-            let new_rel_item = structures_pg::put_t_list_item(
-                &new_rel_item_template,
-                &pg_client,
-            )
-            .await;
+            let new_rel_item_template = structures_pg::TListItem::new(list_item.rel.liid, list_item.rel.parent_lid);
+            let new_rel_item = structures_pg::put_t_list_item(&new_rel_item_template, &pg_client).await;
             if new_rel_item.is_none() {
                 error!(
                     "Failed to create a new t_list_item for liid: {}, lid: {} ",

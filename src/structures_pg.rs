@@ -1,15 +1,19 @@
 use chrono::Utc;
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 use dynomite::Item;
 use log::{self, debug, error};
+use serde::{Deserialize, Serialize};
 use tokio_postgres::{Client, Row};
-
+use uuid::Uuid;
 
 #[path = "./structures_pg_test.rs"]
 pub(crate) mod tests_pg;
 
 // PG structures
+
+#[derive(Debug)]
+pub(crate) enum PgError {
+    Logged,
+}
 
 /// Corresponds to table t_list_item
 #[derive(Item, Serialize, Deserialize, Debug, PartialEq, Clone)]
@@ -47,7 +51,6 @@ pub(crate) struct TUser {
     pub created_on_utc: chrono::DateTime<Utc>,
     pub validated_on_utc: Option<chrono::DateTime<Utc>>,
 }
-
 
 // ===== From<&Row> trait implementation =====
 
@@ -153,10 +156,7 @@ pub(crate) async fn get_t_list_item(liid: Uuid, client: &Client) -> Option<TList
             return None;
         }
         _ => {
-            error!(
-                "ld_get_tlistitem returned multiple rows ({}) for {}",
-                row_count, liid
-            );
+            error!("ld_get_tlistitem returned multiple rows ({}) for {}", row_count, liid);
             Some(TListItem::from(&rows[0]))
         }
     }
@@ -208,10 +208,7 @@ pub(crate) async fn get_t_list(lid: Uuid, client: &Client) -> Option<TList> {
             return None;
         }
         _ => {
-            error!(
-                "ld_get_tlistitem returned multiple rows ({}) for {}",
-                row_count, lid
-            );
+            error!("ld_get_tlistitem returned multiple rows ({}) for {}", row_count, lid);
             Some(TList::from(&rows[0]))
         }
     }
@@ -219,11 +216,7 @@ pub(crate) async fn get_t_list(lid: Uuid, client: &Client) -> Option<TList> {
 
 /// Returns a single t_user from PG as a structure. Use either 1 param + None or both params from the same user.
 /// The DB will return nothing if both params do not match on the same user.
-pub(crate) async fn get_t_user(
-    user_id: Option<Uuid>,
-    user_email: Option<String>,
-    client: &Client,
-) -> Option<TUser> {
+pub(crate) async fn get_t_user(user_id: Option<Uuid>, user_email: Option<String>, client: &Client) -> Option<TUser> {
     debug!(
         "get_t_list for user_id {} / email {}",
         user_id.clone().unwrap_or_else(|| Uuid::default()),
@@ -252,6 +245,32 @@ pub(crate) async fn get_t_user(
             error!("ld_get_tuser returned multiple rows {}", row_count);
             None
         }
+    }
+}
+
+/// Returns top N recent lists for the specified user.
+/// Either `id` or `email` must be specified and belong to the same user if both are present.
+pub(crate) async fn get_user_lists(user_id: Uuid, client: &Client) -> Option<Vec<TList>> {
+    debug!("get_user_lists for user_id {}", user_id);
+
+    // get the data from PG
+    let rows = client
+        .query(
+            "select * from ld_get_user_lists($1::UUID)",
+            &[&user_id],
+        )
+        .await
+        .expect("ld_get_user_lists query failed");
+
+    // check if the result makes sense before returning it
+    let row_count = rows.len();
+    debug!("Rows: {}", row_count);
+    match row_count {
+        0 => {
+            debug!("no rows - returning None.");
+            None
+        }
+        _ => Some(rows.iter().map(|r| TList::from(r)).collect()),
     }
 }
 
@@ -310,10 +329,7 @@ pub(crate) async fn put_t_list(list: &TList, client: &Client) -> Option<TList> {
             return None;
         }
         _ => {
-            error!(
-                "ld_put_tlist returned multiple rows ({}) for {}",
-                row_count, list.lid
-            );
+            error!("ld_put_tlist returned multiple rows ({}) for {}", row_count, list.lid);
             Some(TList::from(&rows[0]))
         }
     }
@@ -356,26 +372,29 @@ pub(crate) async fn del_t_list_item(liid: Uuid, client: &Client) {
 }
 
 /// Deletes a single list with all child items in PG. Other linked lists are not affected.
-pub(crate) async fn del_t_list(lid: Uuid, client: &Client) {
+pub(crate) async fn del_t_list(lid: Uuid, client: &Client) -> Result<(), PgError> {
     debug!("ld_del_tlist for {}", lid);
 
-    // get the data from PG
-    client
-        .query("select * from ld_del_tlist($1::UUID)", &[&lid])
-        .await
-        .expect("ld_del_tlist query failed");
+    // delete the data from PG
+    match client.query("select * from ld_del_tlist($1::UUID)", &[&lid]).await {
+        Err(x) => {
+            error!("Error in del_t_list for {} with {:?}", lid, x);
+            return Err(PgError::Logged);
+        }
+        _ => return Ok(()),
+    }
 }
 
-/// Delete a single user from PG 
-pub(crate) async fn del_t_user(user_id: Uuid, client: &Client) {
+/// Delete a single user from PG.
+pub(crate) async fn del_t_user(user_id: Uuid, client: &Client) -> Result<(), PgError> {
     debug!("ld_del_tuser for {}", user_id);
 
     // get the data from PG
-    client
-        .query("select * from ld_del_tuser($1::UUID)", &[&user_id])
-        .await
-        .expect("ld_del_tuser query failed");
+    match client.query("select * from ld_del_tuser($1::UUID)", &[&user_id]).await {
+        Err(x) => {
+            error!("Error in del_t_user for {} with {:?}", user_id, x);
+            return Err(PgError::Logged);
+        }
+        _ => return Ok(()),
+    }
 }
-
-
-

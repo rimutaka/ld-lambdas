@@ -23,19 +23,9 @@ mod tests_pg {
         let pg_user = pg_user.unwrap(); // it's safe to unwrap after the assert! for Some().
         let pg_user_g1 = get_t_user(None, Some(pg_user.user_email.clone()), &client).await;
         let pg_user_g2 = get_t_user(Some(pg_user.user_id.clone()), None, &client).await;
-        let pg_user_g3 = get_t_user(
-            Some(pg_user.user_id.clone()),
-            Some(pg_user.user_email.clone()),
-            &client,
-        )
-        .await;
+        let pg_user_g3 = get_t_user(Some(pg_user.user_id.clone()), Some(pg_user.user_email.clone()), &client).await;
         let pg_user_g4 = get_t_user(None, None, &client).await;
-        let pg_user_g5 = get_t_user(
-            Some(Uuid::new_v4()),
-            Some(pg_user.user_email.clone()),
-            &client,
-        )
-        .await;
+        let pg_user_g5 = get_t_user(Some(Uuid::new_v4()), Some(pg_user.user_email.clone()), &client).await;
         assert!(pg_user_g1.is_some());
         assert!(pg_user_g2.is_some());
         assert!(pg_user_g3.is_some());

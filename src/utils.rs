@@ -1,8 +1,10 @@
 use log::{debug, error};
-use rusoto_dynamodb::{AttributeValue, GetItemInput, PutItemInput};
+use rusoto_dynamodb::{
+    AttributeValue, BatchGetItemInput, DeleteItemInput, GetItemInput, KeysAndAttributes, PutItemInput,
+};
 use std::collections::HashMap;
 use std::env::var;
-use tokio_postgres::{NoTls};
+use tokio_postgres::NoTls;
 use uuid::Uuid;
 
 /// Load DB Config from env variables
@@ -47,12 +49,78 @@ pub(crate) fn build_ddb_get_input(table_key: &str, key_value: &Uuid, table: &str
     }
 }
 
-pub(crate) fn build_ddb_put_input(
-    item: HashMap<String, AttributeValue>,
-    table: &str,
-) -> PutItemInput {
+/// Build BatchGetItemInput from a list of keys. Only the first 100 keys are considered
+pub(crate) fn build_ddb_get_batch_input(
+    table_key: &str,
+    key_values: &Vec<Uuid>,
+    table_name: &str,
+) -> BatchGetItemInput {
+    // build a list of UUID keys as a list of hashmaps
+    let mut keys: Vec<HashMap<String, AttributeValue>> = Vec::new();
+    for (i, kv) in key_values.iter().enumerate() {
+        // only 100 can be requested as per
+        // https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_BatchGetItem.html
+        if i > 99 {
+            break;
+        };
+
+        // push the attribute into the array
+        let key_value = kv.clone();
+        let mut key: HashMap<String, AttributeValue> = HashMap::new();
+        key.insert(
+            String::from(table_key),
+            AttributeValue {
+                s: Some(key_value.to_string()),
+                ..Default::default()
+            },
+        );
+        keys.push(key);
+    }
+
+    // put it all together into RequestItems structure
+    // https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_BatchGetItem.html#API_BatchGetItem_RequestSyntax
+    let mut request_items: HashMap<String, KeysAndAttributes> = HashMap::new();
+    request_items.insert(
+        table_name.into(),
+        KeysAndAttributes {
+            keys,
+            attributes_to_get: Some(vec![
+                "lid".to_string(),
+                "title".to_string(),
+                "description".to_string(),
+                "tags".to_string(),
+                "rel".to_string(),
+            ]),
+            ..Default::default()
+        },
+    );
+
+    BatchGetItemInput {
+        request_items,
+        ..Default::default()
+    }
+}
+
+pub(crate) fn build_ddb_put_input(item: HashMap<String, AttributeValue>, table: &str) -> PutItemInput {
     PutItemInput {
         item: item,
+        table_name: String::from(table),
+        ..Default::default()
+    }
+}
+
+pub(crate) fn build_ddb_del_input(table_key: &str, key_value: Uuid, table: &str) -> DeleteItemInput {
+    let mut key_attr: HashMap<String, AttributeValue> = HashMap::new();
+    key_attr.insert(
+        String::from(table_key),
+        AttributeValue {
+            s: Some(key_value.to_string()),
+            ..Default::default()
+        },
+    );
+
+    DeleteItemInput {
+        key: key_attr,
         table_name: String::from(table),
         ..Default::default()
     }
