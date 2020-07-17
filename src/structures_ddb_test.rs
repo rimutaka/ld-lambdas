@@ -10,13 +10,24 @@ mod tests_ddb {
     async fn test_dynamodb_list_listitems_new_update_delete() {
         debug!("test_dynamodb_functions started");
 
-        // prepare some constants
-        let user_id = uuid::Uuid::parse_str("dbc44eaa-364f-4a4f-b25e-15218c7928a7").unwrap();
-        let lid = Uuid::new_v4();
-        let list_title = "My test list X".to_string();
-
         // prepare DDB and PG connections
         let (pg_client, ddb_client) = test_helpers::init_db_clients().await;
+
+        // create a new user
+        let user_email = [
+            "test_dynamodb_get_user_lists@",
+            Uuid::new_v4().to_string().as_str(),
+            ".com",
+        ]
+        .concat();
+        let pg_user = put_t_user(&user_email, &pg_client)
+            .await
+            .expect("Failed to create a new user");
+
+        // prepare some constants
+        let user_id = pg_user.user_id.clone();
+        let lid = Uuid::new_v4();
+        let list_title = "My test list X".to_string();
 
         // create a brand new list template
         let ddb_list_template = LdList::new(lid.clone(), list_title, user_id);
@@ -96,6 +107,9 @@ mod tests_ddb {
         for item_remaining in list_del_1.unwrap().unwrap().items.unwrap() {
             assert_ne!(item_remaining.rel.liid, liid_1);
         }
+
+        // clean up
+        assert!(del_t_user(pg_user.user_id.clone(), &pg_client).await.is_ok());
     }
 
     #[tokio::test]
@@ -233,7 +247,7 @@ mod tests_ddb {
 
         /// Creates Postgres and DynamoDB connection clients in one sweep.
         pub(crate) async fn init_db_clients() -> (tokio_postgres::Client, rusoto_dynamodb::DynamoDbClient) {
-            simple_logger::init_with_level(log::Level::Debug).expect("Cannot initialise simple_logger");
+            utils::log_init(log::Level::Debug);
             debug!("init_db_clients started");
 
             // prepare DDB and PG connections

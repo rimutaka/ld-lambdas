@@ -11,7 +11,7 @@ mod utils;
 
 #[tokio::main] // By default, tokio_postgres uses the tokio crate as its runtime.
 async fn main() -> Result<(), Error> {
-    simple_logger::init_with_level(log::Level::Debug).expect("Cannot initialise simple_logger");
+    utils::log_init(log::Level::Debug);
     debug!("main started");
     debug!("");
 

@@ -146,3 +146,17 @@ pub(crate) async fn get_pg_client() -> tokio_postgres::Client {
     // return the client to the caller
     client
 }
+
+/// Initializes `simple_logger` in a safe way to avoid panic on
+/// multiple init calls.
+pub(crate) fn log_init(level: log::Level) {
+    match simple_logger::init_with_level(level) {
+        Err(e) => {
+            debug!("simple_logger::init failed {}", e.to_string());
+        }
+
+        _ => {
+            debug!("simple_logger::init succeeded");
+        }
+    }
+}

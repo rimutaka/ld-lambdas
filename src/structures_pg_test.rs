@@ -5,17 +5,18 @@ mod tests_pg {
     use crate::utils::get_pg_client;
     use log::{self, debug};
     use uuid::Uuid;
+    use crate::utils;
 
     #[tokio::test]
     async fn test_postgres_functions() {
-        simple_logger::init_with_level(log::Level::Debug).expect("Cannot initialize simple_logger");
+        utils::log_init(log::Level::Debug);
         debug!("main started");
 
         // Connect to the database.
         let client = get_pg_client().await;
 
         // create a new user
-        let user_email = "test_postgres_functions@example.com".to_string();
+        let user_email = ["test_postgres_functions@", Uuid::new_v4().to_string().as_str(), ".com"].concat();
         let pg_user = put_t_user(&user_email, &client).await;
         assert!(pg_user.is_some());
 
@@ -81,7 +82,7 @@ mod tests_pg {
         assert!(pg_list_item_2d.is_some());
 
         // delete the list and all the other items with it - there should be none left
-        del_t_list(pg_list_item_1.parent_lid, &client).await;
+        del_t_list(pg_list_item_1.parent_lid, &client).await.expect("del_t_list failed");
         let pg_list_item_2d = get_t_list_item(pg_list_item_2.liid, &client).await;
         let pg_list_item_3d = get_t_list_item(pg_list_item_3.liid, &client).await;
         let list_d = get_t_list(pg_list_item_1.parent_lid, &client).await;
@@ -90,7 +91,7 @@ mod tests_pg {
         assert!(list_d.is_none());
 
         // delete the user
-        del_t_user(pg_user.user_id.clone(), &client).await;
+        del_t_user(pg_user.user_id.clone(), &client).await.expect("del_t_list failed");
         let pg_user_d1 = get_t_user(Some(pg_user.user_id.clone()), None, &client).await;
         assert!(pg_user_d1.is_none());
     }
